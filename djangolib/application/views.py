@@ -6,8 +6,14 @@ from authentification.models import Utilisateur, medecinPatient
 from datetime import datetime, date, timedelta
 from django.db.utils import OperationalError
 import pandas as pd
+from .mlflow_utils import init_mlflow, send_alert_discord
+import mlflow
 from django.http import HttpResponseBadRequest
 import numpy as np
+
+init_mlflow()
+consecutive_failures = 0
+SEUIL_ALERT = 1
 
 #from .models import col_stress
 
@@ -24,6 +30,9 @@ def data_stress(request, prochainFormulaire_date_stress=None):
     message = ""
     svp = ""
     disabled = ""
+    consecutive_failures = 0
+    SEUIL_ALERT = 1
+
     try:
         dateDernierFormulaireDuPatient = list(ColStress.objects.filter(user_id=Utilisateur.objects.filter(username=request.user.username)[0]))[-1].date
         dateDernierFormulaireDuPatient = datetime.strptime(dateDernierFormulaireDuPatient, '%d/%m/%Y')
@@ -55,7 +64,32 @@ def data_stress(request, prochainFormulaire_date_stress=None):
         if request.method == 'POST':
             form = ColStressForm(request.POST, initial=initial_data)
             if form.is_valid() and remplirProchainFormulaire:
-                form.save()
+
+                try:
+                    form.save()
+                    mlflow.log_metric("insertion_successful", 1)
+                    #consecutive_failures = 0
+                    consecutive_failures += 1
+                    print(consecutive_failures, flush=True)
+                    if consecutive_failures >= SEUIL_ALERT:
+                        print('seuil atteint', flush=True)
+                        send_alert_discord("Alerte MLflow", f"Le seuil d'échecs consécutifs ({SEUIL_ALERT}) a été atteint.")
+                        # Réinitialiser le compteur après avoir envoyé l'alerte
+                        consecutive_failures = 0
+
+                except Exception as e:
+                    # Enregistrez un événement MLflow pour le suivi des erreurs
+                    mlflow.log_metric("insertion_successful", 0)
+                    mlflow.log_param("error_message", str(e))
+                    consecutive_failures += 1
+                    print(consecutive_failures, flush=True)
+
+                    if consecutive_failures >= SEUIL_ALERT:
+                        print('seuil atteint', flush=True)
+                        send_alert_discord("Alerte MLflow", f"Le seuil d'échecs consécutifs ({SEUIL_ALERT}) a été atteint.")
+                        # Réinitialiser le compteur après avoir envoyé l'alerte
+                        consecutive_failures = 0
+
                 return redirect('accueil')  # Redirect to a confirmation page
             elif not remplirProchainFormulaire:
                 message = "Vous ne pouvez pas encore soumettre de réponse pour ce questionnaire"
