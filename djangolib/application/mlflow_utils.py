@@ -15,7 +15,6 @@ THRESHOLD_CPU_UTILIZATION = 80  # en pourcentage
 THRESHOLD_MEMORY_UTILIZATION = 80  # en pourcentage
 THRESHOLD_STORAGE_UTILIZATION = 80  # en pourcentage
 
-
 # Affectation des variables d'environnement
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1194197972859240549/bIM9M48OQjhzfSzbYUz58UF26pUwFAdKRqnutEqSzHzhsEwCPTnqF2NxyQziWeMkHkmc")
 

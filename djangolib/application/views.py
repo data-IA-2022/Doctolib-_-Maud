@@ -15,8 +15,6 @@ init_mlflow()
 consecutive_failures = 0
 SEUIL_ALERT = 1
 
-#from .models import col_stress
-
 # Create your views here.
 @login_required
 def accueil(request):
