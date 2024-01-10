@@ -14,6 +14,7 @@ import random
 from django.http import HttpResponseBadRequest
 import numpy as np
 
+
 init_mlflow()
 
 # Create your views here.
