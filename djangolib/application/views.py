@@ -16,48 +16,103 @@ import numpy as np
 
 init_mlflow()
 
-# Connexion à la base de données SQLite
-conn = sqlite3.connect('mlflow.db')
-cursor = conn.cursor()
-# Définir le seuil d'alerte
-SEUIL_ALERT = 3
-# Exécution de la requête SQL pour récupérer les x dernières valeurs
-cursor.execute(f'SELECT value FROM metrics ORDER BY timestamp DESC')
-values = cursor.fetchall()
-x_last_values = values[-SEUIL_ALERT:]
-x_all_zero = all(value == 0 for value in x_last_values)
-# Fermeture de la connexion à la base de données
-conn.close()
-
 # Create your views here.
-def handle_form_submission(form, form_name):
-    global SEUIL_ALERT
-    global values
-    global x_all_zero
-
+def handle_form_submission(form, form_name, prenom):
 
     with connections['default'].cursor() as cursor:
         x = random.randint(1, 100)
-        print("est le numéro gagnant est le", x, flush=True)
+        print("et le numéro gagnant est le", x, flush=True)
         if (x % 2) == 0:
             print("pas de chance, ça va être tout noir", flush=True)
             cursor.connection.close()
-            #if cursor.connection.closed:
-                #print("connexion interrompue", flush=True)
-    try:
-        form.save()
-        mlflow.log_metric("insertions_successful", 1)
 
-    except Exception as e:
-        # Enregistrez un événement MLflow pour le suivi des erreurs
-        mlflow.log_metric("insertions_successful", 0)
-        mlflow.log_param("error_message", f"{form_name}: {str(e)}")
+        try:
+            form.save()
+            mlflow.log_metric("is_insertion_successful", 1)
+            mlflow.log_param("form", form_name)
+            mlflow.log_param("user", prenom)
 
-        if len(values) >= SEUIL_ALERT:
-            if x_all_zero:
+        except Exception as e:
+            # Enregistrez un événement MLflow pour le suivi des erreurs
+            mlflow.log_metric("is_insertion_successful", 0)
+            mlflow.log_param("error_message", str(e))
+            mlflow.log_param("form", form_name)
+            mlflow.log_param("user", prenom)
+
+        finally:
+
+            # Connexion à la base de données SQLite
+            conn = sqlite3.connect('mlflow.db')
+            cursor = conn.cursor()
+            #nombre de valeurs à prendre en compte, ou x dernières valeurs
+            metrics = 3
+            #seuil d'alerte
+            threshold = 2
+            # Exécution de la requête SQL pour récupérer les x dernières valeurs
+            cursor.execute(f'SELECT value FROM metrics ORDER BY timestamp DESC')
+            values = cursor.fetchall()
+            cursor.execute(f'SELECT value FROM metrics ORDER BY timestamp DESC LIMIT {metrics}')
+            x_last_values = cursor.fetchall()
+            cursor.execute(f'SELECT params.value FROM params'
+                           f' JOIN metrics ON metrics.run_uuid = params.run_uuid'
+                           f' WHERE params.key = "error_message" AND metrics.value = 0'
+                           f' AND metrics.timestamp IN (SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT {metrics})'
+                           f' ORDER BY metrics.timestamp DESC')
+            x_last_errors = cursor.fetchall()
+            cursor.execute(f'SELECT params.value FROM params'
+                           f' JOIN metrics ON metrics.run_uuid = params.run_uuid'
+                           f' WHERE params.key = "form" AND metrics.value = 0 AND metrics.timestamp'
+                           f' IN (SELECT timestamp FROM metrics ORDER BY timestamp DESC LIMIT {metrics})'
+                           f' ORDER BY metrics.timestamp DESC')
+            failed_forms = cursor.fetchall()
+            print("x dernières valeurs:", x_last_values)
+            print("x dernières erreurs:", x_last_errors)
+            print("formulaires:", failed_forms)
+            #nombre d'échecs parmi les x dernières valeurs
+            fail = sum(val[0] == 0 or val[0] == 0.0 for val in x_last_values)
+            print("nombre d'échecs:", fail)
+
+            # Fermeture de la connexion à la base de données
+            conn.close()
+
+            if len(values) >= metrics and fail >= threshold:
                 print('seuil atteint', flush=True)
-                send_alert_discord("Alerte MLflow", f"Le seuil d'échecs consécutifs ({SEUIL_ALERT}) a été atteint.")
 
+                errors_and_forms = []  # Liste pour stocker les erreurs avec les formulaires associés
+                unique_errors = set()
+                unique_forms = set()
+
+                for val, form in zip(x_last_errors, failed_forms):
+                    error_message = val[0]
+                    form_name = form[0]
+
+                    # Vérifier si l'erreur est unique
+                    if error_message not in unique_errors:
+                        errors_and_forms.append({"error": error_message, "forms": {form_name}})
+                        unique_errors.add(error_message)
+                    else:
+                        # Ajouter le formulaire associé à une erreur existante
+                        for entry in errors_and_forms:
+                            if entry["error"] == error_message:
+                                entry["forms"].add(form_name)
+
+                    # Ajouter le formulaire associé
+                    unique_forms.add(form_name)
+
+                formatted_issues = ""
+                counter = 1
+
+                for entry in errors_and_forms:
+                    error_message = entry["error"]
+                    forms_associated = ", ".join(entry["forms"])
+
+                    formatted_issues += f"\n ⚠️ {counter}. Erreur: {error_message}\n Formulaire(s) associé(s): {forms_associated}\n{'*' * 20}\n"
+                    counter += 1
+
+                issue = formatted_issues.rstrip('\n') if formatted_issues else "Aucune erreur n'a été trouvée."
+
+                send_alert_discord("Alerte MLflow", f"Le seuil d'échecs ({threshold} envois sur {metrics}) a été atteint."
+                                                    f"\n Le ou les problèmes suivants ont causé l'alerte: {issue}")
 
 
 @login_required
@@ -71,8 +126,7 @@ def accueil(request):
 def data_stress(request, prochainFormulaire_date_stress=None):
     message = ""
     svp = ""
-    disabled = ""
-    #connection = connections['default']
+    prenom = request.user.username
 
     try:
         dateDernierFormulaireDuPatient = list(ColStress.objects.filter(user_id=Utilisateur.objects.filter(username=request.user.username)[0]))[-1].date
@@ -105,7 +159,8 @@ def data_stress(request, prochainFormulaire_date_stress=None):
         if request.method == 'POST':
             form = ColStressForm(request.POST, initial=initial_data)
             if form.is_valid() and remplirProchainFormulaire:
-                handle_form_submission(form, "data_stress")
+                with mlflow.start_run():
+                    handle_form_submission(form, "data_stress", prenom)
                 return redirect('accueil')  # Redirect to a confirmation page
             elif not remplirProchainFormulaire:
                 message = "Vous ne pouvez pas encore soumettre de réponse pour ce questionnaire"
@@ -124,7 +179,7 @@ def data_stress(request, prochainFormulaire_date_stress=None):
 def data_sante(request, prochainFormulaire_date_sante=None):
     message = ""
     svp = ""
-    disabled = ""
+    prenom = request.user.username
 
     try:
         dateDernierFormulaireDuPatient = list(ColSante.objects.filter(user_id=Utilisateur.objects.filter(username=request.user.username)[0]))[-1].date
@@ -157,7 +212,8 @@ def data_sante(request, prochainFormulaire_date_sante=None):
         if request.method == 'POST':
             form = ColSanteForm(request.POST, initial=initial_data)
             if form.is_valid() and remplirProchainFormulaire:
-                handle_form_submission(form, "data_sante")
+                with mlflow.start_run():
+                    handle_form_submission(form, "data_sante", prenom)
                 return redirect('accueil')  # Redirect to a confirmation page
             elif not remplirProchainFormulaire:
                 message = "Vous ne pouvez pas encore soumettre de réponse pour ce questionnaire"
