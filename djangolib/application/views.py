@@ -10,53 +10,54 @@ from .mlflow_utils import init_mlflow, send_alert_discord
 import mlflow
 import sqlite3
 from django.db import connection, connections
+import random
 from django.http import HttpResponseBadRequest
 import numpy as np
 
 init_mlflow()
-#consecutive_failures = 0
-SEUIL_ALERT = 98
 
 # Connexion à la base de données SQLite
 conn = sqlite3.connect('mlflow.db')
 cursor = conn.cursor()
-# Exécution de la requête SQL pour compter le nombre total de lignes
-cursor.execute('SELECT COUNT(*) FROM metrics')
-total_rows = cursor.fetchone()[0]
-# Exécution de la requête SQL pour compter le nombre de lignes avec la valeur 1
-cursor.execute('SELECT COUNT(*) FROM metrics WHERE value = 1')
-success = cursor.fetchone()[0]
-# Calcul du pourcentage
-percent = (success / total_rows) * 100 if total_rows > 0 else 0
+# Définir le seuil d'alerte
+SEUIL_ALERT = 3
+# Exécution de la requête SQL pour récupérer les x dernières valeurs
+cursor.execute(f'SELECT value FROM metrics ORDER BY timestamp DESC')
+values = cursor.fetchall()
+x_last_values = values[-SEUIL_ALERT:]
+x_all_zero = all(value == 0 for value in x_last_values)
 # Fermeture de la connexion à la base de données
 conn.close()
 
 # Create your views here.
 def handle_form_submission(form, form_name):
-    global percent #consecutive_failures
     global SEUIL_ALERT
+    global values
+    global x_all_zero
 
-    print("pourcentage:", percent, flush=True)
 
-    try:
-        with connections['default'].cursor() as cursor:
+    with connections['default'].cursor() as cursor:
+        x = random.randint(1, 100)
+        print("est le numéro gagnant est le", x, flush=True)
+        if (x % 2) == 0:
+            print("pas de chance, ça va être tout noir", flush=True)
             cursor.connection.close()
-            form.save()
-            mlflow.log_metric("insertions_successful", 1)
-            #consecutive_failures = 0
+            #if cursor.connection.closed:
+                #print("connexion interrompue", flush=True)
+    try:
+        form.save()
+        mlflow.log_metric("insertions_successful", 1)
 
     except Exception as e:
         # Enregistrez un événement MLflow pour le suivi des erreurs
         mlflow.log_metric("insertions_successful", 0)
         mlflow.log_param("error_message", f"{form_name}: {str(e)}")
-        #consecutive_failures += 1
-        #print(consecutive_failures, flush=True)
 
-        if percent >= SEUIL_ALERT:
-            print('seuil atteint', flush=True)
-            send_alert_discord("Alerte MLflow", f"Le seuil d'échecs consécutifs ({SEUIL_ALERT}) a été atteint.")
-            # Réinitialiser le compteur après avoir envoyé l'alerte
-            #consecutive_failures = 0
+        if len(values) >= SEUIL_ALERT:
+            if x_all_zero:
+                print('seuil atteint', flush=True)
+                send_alert_discord("Alerte MLflow", f"Le seuil d'échecs consécutifs ({SEUIL_ALERT}) a été atteint.")
+
 
 
 @login_required
@@ -104,12 +105,6 @@ def data_stress(request, prochainFormulaire_date_stress=None):
         if request.method == 'POST':
             form = ColStressForm(request.POST, initial=initial_data)
             if form.is_valid() and remplirProchainFormulaire:
-                with connections['default'].cursor() as cursor:
-                    cursor.connection.close()
-                if connection.connection is None:
-                    print("La connexion a été fermée avec succès.", flush=True)
-                else:
-                    print("Échec de la fermeture de la connexion.", flush=True)
                 handle_form_submission(form, "data_stress")
                 return redirect('accueil')  # Redirect to a confirmation page
             elif not remplirProchainFormulaire:
