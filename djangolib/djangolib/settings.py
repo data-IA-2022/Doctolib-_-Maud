@@ -140,5 +140,9 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': '/home/greta/Téléchargements/newbdd.sqlite3',
+    },
+    'bddlib': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': '/home/greta/Cours/Projets/Doctolib-_-Maud/djangolib/fakebdd.sqlite3',
     }
 }
